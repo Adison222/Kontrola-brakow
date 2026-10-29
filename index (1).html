@@ -1879,7 +1879,7 @@ const LoginScreen = () => {
           </dialog>, document.body);
       };
 
-      const AddDefect = ({ units, setUnits, components, initialDefect = null, initialUnitNumber = '', onDone }) => {
+      const AddDefect = ({ units, setUnits, components, initialDefect = null, initialUnitNumber = '', onDone, onDelete, deleting = false }) => {
         const [unitNumber, setUnitNumber] = useState(initialDefect?.unitNumber || initialUnitNumber);
         const [component, setComponent] = useState(initialDefect?.component || '');
         const [componentSearch, setComponentSearch] = useState('');
@@ -1894,7 +1894,7 @@ const LoginScreen = () => {
 
 
         const handleAdd = async () => {
-          if (!normalizeUnitNumber(unitNumber) || !component || saving) return;
+          if (!normalizeUnitNumber(unitNumber) || !component || saving || deleting) return;
 
           setSaving(true);
           try {
@@ -2030,7 +2030,7 @@ const LoginScreen = () => {
 
             <button
               onClick={handleAdd}
-              disabled={saving || !normalizeUnitNumber(unitNumber) || !component}
+              disabled={saving || deleting || !normalizeUnitNumber(unitNumber) || !component}
               className="mt-6 md:mt-8 w-full btn-primary"
             >
               {saving ? (
@@ -2045,6 +2045,13 @@ const LoginScreen = () => {
                 </>
               )}
             </button>
+            {initialDefect && onDelete && <div className="mt-6 border-t border-gray-200 pt-4">
+              <button type="button" disabled={saving || deleting} onClick={onDelete}
+                className="text-red-700 border border-red-300 rounded-lg px-4 py-2 hover:bg-red-50 disabled:opacity-50">
+                {deleting ? 'Usuwanie...' : 'Usuń brak'}
+              </button>
+            </div>}
+
           </div>
         );
       };
@@ -2242,7 +2249,7 @@ const DefectList = ({
       />
 
       {defectEditor && <DefectDialog onClose={() => setDefectEditor(null)}>
-        <AddDefect key={defectEditor.id || defectEditor.unitNumber} units={units} setUnits={setUnits} components={components} initialDefect={defectEditor.id ? defectEditor : null} initialUnitNumber={defectEditor.unitNumber} onDone={() => setDefectEditor(null)} />
+        <AddDefect key={defectEditor.id || defectEditor.unitNumber} units={units} setUnits={setUnits} components={components} initialDefect={defectEditor.id ? defectEditor : null} initialUnitNumber={defectEditor.unitNumber} onDelete={() => handleDeleteDefect(defectEditor)} deleting={deletingId !== null} onDone={() => setDefectEditor(null)} />
       </DefectDialog>}
       <div className="space-y-2 md:space-y-3">
         {sortedUnits.map((unitNumber) => {
@@ -2345,7 +2352,6 @@ const DefectList = ({
                         </td>
                         <td className="px-2 py-1.5 text-center">
                           <button disabled={updating || deletingId !== null} className="mr-2 text-orange-600" onClick={() => setDefectEditor(defect)}>Edytuj</button>
-                          <button disabled={updating || deletingId !== null} className="mr-2 text-red-600 disabled:opacity-50" onClick={() => handleDeleteDefect(defect)}>{deletingId === defect.id ? 'Usuwanie...' : 'Usuń'}</button>
                           <label className="inline-flex items-center cursor-pointer">
                             <input
                               type="checkbox"
