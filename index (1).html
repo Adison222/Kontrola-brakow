@@ -1029,6 +1029,39 @@ window.onAuthStateChanged = onAuthStateChanged;
 const { signInWithEmailAndPassword, signOut, onAuthStateChanged } = window;
 
 
+      const componentKey = (name) => String(name || '').normalize('NFC').trim().replace(/\s+/g, ' ').toLocaleLowerCase('pl');
+      const sortComponents = (items) => [...items].sort((a, b) =>
+        Number(/^\d/.test(a.name.trim())) - Number(/^\d/.test(b.name.trim())) ||
+        a.name.localeCompare(b.name, 'pl', { numeric: true, sensitivity: 'base' }));
+      const matchesComponent = (item, name) => [item.name, ...(item.aliases || [])].some(value => componentKey(value) === componentKey(name));
+      // Merge definitions only. Historical defects retain their names and all data.
+      const mergeComponents = async (items) => {
+        const groups = new Map();
+        for (const item of items) {
+          const key = componentKey(item.name);
+          groups.set(key, [...(groups.get(key) || []), item]);
+        }
+        const result = [];
+        for (const group of groups.values()) {
+          group.sort((a, b) => a.id.localeCompare(b.id));
+          const primary = group[0];
+          if (group.length > 1) {
+            const fields = [];
+            for (const item of group) for (const field of item.fields || []) {
+              if (!fields.some(f => f.name === field.name && f.type === field.type)) fields.push(field);
+            }
+            const aliases = [...new Set(group.flatMap(item => [item.name, ...(item.aliases || [])]))];
+            const merged = { fields, aliases };
+            // Persist the union before deleting redundant definitions; retries are safe.
+            await window.dataManager.updateData('components', primary.id, merged);
+            Object.assign(primary, merged);
+            for (const duplicate of group.slice(1)) await window.dataManager.deleteData('components', duplicate.id);
+          }
+          result.push(primary);
+        }
+        return sortComponents(result);
+      };
+
       // NOWY - Komponent logowania
 const LoginScreen = () => {
   const [email, setEmail] = useState('');
@@ -1392,7 +1425,7 @@ const LoginScreen = () => {
               }
               setComponents(defaultComponents);
             } else {
-              setComponents(componentsData);
+              setComponents(await mergeComponents(componentsData));
             }
           } catch (err) {
             setError('Błąd ładowania danych');
@@ -1889,7 +1922,7 @@ const LoginScreen = () => {
                 <label className="form-label">KOMPONENT</label>
                 <input type="search" aria-label="Szukaj komponentu" placeholder="Szukaj komponentu..." className="form-input" value={componentSearch} onChange={e => setComponentSearch(e.target.value)} />
                 <div className="border rounded-lg overflow-y-auto max-h-60" role="group" aria-label="Lista komponentów">
-                  {components.filter(comp => comp.name.toLowerCase().includes(componentSearch.trim().toLowerCase())).map(comp => (
+                  {sortComponents(components).filter(comp => comp.name.toLowerCase().includes(componentSearch.trim().toLowerCase())).map(comp => (
                     <button type="button" key={comp.name} aria-pressed={component === comp.name}
                       className={`block w-full text-left px-3 py-2 border-b ${component === comp.name ? 'bg-orange-100 text-orange-800 font-bold' : 'bg-white hover:bg-gray-100'}`}
                       onClick={() => { if (component !== comp.name) { setComponent(comp.name); setFields({}); } }}>
@@ -1904,7 +1937,7 @@ const LoginScreen = () => {
 
               {component &&
                 components
-                  .find((c) => c.name === component)
+                  .find((c) => matchesComponent(c, component))
                   ?.fields.map((field) => (
                     <div key={field.name} className="space-y-2 md:space-y-3">
                       <label className="form-label">
@@ -2646,7 +2679,7 @@ const DefectList = ({
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-6">
                     {components
-                      .find((c) => c.name === editDefect.component)
+                      .find((c) => matchesComponent(c, editDefect.component))
                       ?.fields.map((field) => (
                         <div key={field.name} className="space-y-2">
                           <label className="form-label">
@@ -2706,6 +2739,7 @@ const DefectList = ({
       // Options pozostaje bez zmian z poprzedniej wersji
       const Options = ({ components, setComponents }) => {
         const [newComponent, setNewComponent] = useState('');
+        const [editing, setEditing] = useState(null);
         const [fields, setFields] = useState([]);
         const [fieldCount, setFieldCount] = useState(1);
         const [saving, setSaving] = useState(false);
@@ -2714,9 +2748,23 @@ const DefectList = ({
         const handleAddComponent = async () => {
           if (!newComponent || fields.length !== fieldCount || saving) return;
 
+          const name = newComponent.trim().replace(/\s+/g, ' ');
+          if (!name) return;
           setSaving(true);
           try {
-            const componentData = { name: newComponent, fields };
+            const current = await window.dataManager.getData('components');
+            if (current.some(c => c.id !== editing?.id && matchesComponent(c, name))) {
+              showToast('Taki komponent już istnieje', 'error');
+              return;
+            }
+            const componentData = { name, fields, aliases: editing ? [...new Set([editing.name, ...(editing.aliases || [])])] : [] };
+            if (editing) {
+              await window.dataManager.updateData('components', editing.id, componentData);
+              setComponents(components.map(c => c.id === editing.id ? { ...c, ...componentData } : c));
+              setEditing(null); setNewComponent(''); setFields([]); setFieldCount(1);
+              showToast('Komponent zapisany. Dane braków i archiwum zachowane.', 'success');
+              return;
+            }
             const addedComponent = await window.dataManager.addData(
               'components',
               componentData
@@ -2759,6 +2807,7 @@ const DefectList = ({
 
         return (
           <div className="glass-card">
+            {editing && <div role="status">Edycja: {editing.name} <button disabled={saving} onClick={() => { setEditing(null); setNewComponent(''); setFields([]); setFieldCount(1); }}>Anuluj edycję</button></div>}
             <div className="flex items-center mb-6 md:mb-8">
               <div className="w-12 h-12 md:w-16 md:h-16 bg-gradient-to-br from-green-400 to-teal-500 rounded-xl md:rounded-2xl flex items-center justify-center mr-4 md:mr-6">
                 <i className="fas fa-cog text-lg md:text-2xl text-white"></i>
@@ -2887,7 +2936,7 @@ const DefectList = ({
                     ) : (
                       <>
                         <i className="fas fa-plus-circle mr-2"></i>
-                        Dodaj Komponent
+                        {editing ? 'Zapisz komponent' : 'Dodaj Komponent'}
                       </>
                     )}
                   </button>
@@ -2901,7 +2950,7 @@ const DefectList = ({
                 </h3>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 md:gap-6">
-                  {components.map((comp) => (
+                  {sortComponents(components).map((comp) => (
                     <div
                       key={comp.id}
                       className="bg-white border-2 border-gray-200 rounded-xl md:rounded-2xl p-4 md:p-6 hover:border-orange-300 hover:shadow-lg transition-all duration-300 transform hover:scale-105"
@@ -2916,6 +2965,13 @@ const DefectList = ({
                           </h4>
                         </div>
                         <button
+                          onClick={() => { setEditing(comp); setNewComponent(comp.name); setFields((comp.fields || []).map(f => ({ ...f }))); setFieldCount((comp.fields || []).length); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
+                          disabled={saving}
+                          title="Edytuj komponent"
+                          className="btn-primary"
+                        >Edytuj</button>
+                        <button
+                          disabled={saving}
                           onClick={() => handleDeleteComponent(comp)}
                           className="text-red-500 hover:text-red-700 hover:bg-red-50 p-1 md:p-2 rounded-full transition-all duration-200"
                         >
