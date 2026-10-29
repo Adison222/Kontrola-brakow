@@ -23,6 +23,14 @@
     <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
 
     <style>
+      .defect-dialog { border: 0; border-radius: 16px; padding: 0 16px 16px; width: min(900px, calc(100vw - 24px)); max-height: calc(100dvh - 32px); overflow-y: auto; color: #111827; background: #fff; }
+      .defect-dialog::backdrop { background: rgba(15, 23, 42, .65); }
+      .defect-dialog-toolbar { position: sticky; top: 0; display: flex; justify-content: flex-end; background: #fff; z-index: 10; padding: 8px 0; }
+      .defect-dialog-close { width: 44px; height: 44px; font-size: 32px; line-height: 1; border-radius: 8px; color: #111827; background: #f3f4f6; cursor: pointer; }
+      .defect-dialog-close:hover { background: #e5e7eb; }
+      .defect-dialog-close:focus-visible { outline: 3px solid #f97316; }
+      .defect-dialog .glass-card { transform: none !important; }
+
       /* Poprzedni CSS pozostaje bez zmian - kopiuję wszystkie style */
       @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap');
 
@@ -1029,6 +1037,25 @@ window.onAuthStateChanged = onAuthStateChanged;
 const { signInWithEmailAndPassword, signOut, onAuthStateChanged } = window;
 
 
+      const deliveryToday = () => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Warsaw', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+      const dueDeliveries = (items, today) => items.filter(item => !item.completed && /^\d{4}-\d{2}-\d{2}$/.test(item.deliveryDate || '') && item.deliveryDate <= today);
+      const DeliveryNotices = ({ units }) => {
+        const [today, setToday] = useState(deliveryToday);
+        useEffect(() => {
+          const refresh = () => setToday(deliveryToday());
+          const timer = setInterval(refresh, 30000);
+          window.addEventListener('focus', refresh);
+          return () => { clearInterval(timer); window.removeEventListener('focus', refresh); };
+        }, []);
+        const due = dueDeliveries(units, today).sort((a, b) => a.deliveryDate.localeCompare(b.deliveryDate));
+        return <section aria-label="Komunikaty o dostawach" aria-live="polite" className="mb-4 p-4 rounded-xl bg-amber-50 border border-amber-300 text-gray-900">
+          <h2 className="font-bold">Przypomnienia o dostawach ({due.length})</h2>
+          {due.length === 0 ? <p>Brak dostaw wymagających sprawdzenia.</p> : <ul className="space-y-2 mt-2">{due.map(item => <li key={item.id}>
+            <strong>{item.unitNumber} — {item.component}</strong>: {item.deliveryDate === today ? 'Termin dostawy dzisiaj' : 'Minął termin dostawy'} ({item.deliveryDate.split('-').reverse().join('.')}). Sprawdź dostawę.
+          </li>)}</ul>}
+        </section>;
+      };
+
       const componentKey = (name) => String(name || '').normalize('NFC').trim().replace(/\s+/g, ' ').toLocaleLowerCase('pl');
       const sortComponents = (items) => [...items].sort((a, b) =>
         Number(/^\d/.test(a.name.trim())) - Number(/^\d/.test(b.name.trim())) ||
@@ -1687,6 +1714,7 @@ const LoginScreen = () => {
             </header>
 
             <div className="container mx-auto p-4 md:p-6">
+              <DeliveryNotices units={units} />
               {page === 'add' && (
                 <AddDefect
                   units={units}
@@ -1827,10 +1855,35 @@ const LoginScreen = () => {
         }, [props.value]);
         return <textarea {...props} ref={ref} style={{width: '100%', overflow: 'hidden', ...props.style}} />;
       };
+      const DefectDialog = ({ onClose, children }) => {
+        const dialogRef = useRef(null);
+        useEffect(() => {
+          const dialog = dialogRef.current;
+          const previousFocus = document.activeElement;
+          const previousOverflow = document.body.style.overflow;
+          dialog.showModal();
+          document.body.style.overflow = 'hidden';
+          return () => {
+            dialog.close();
+            document.body.style.overflow = previousOverflow;
+            if (previousFocus?.isConnected) previousFocus.focus({ preventScroll: true });
+          };
+        }, []);
+        return ReactDOM.createPortal(
+          <dialog ref={dialogRef} aria-label="Formularz braku" onCancel={event => { event.preventDefault(); onClose(); }}
+            className="defect-dialog">
+            <div className="defect-dialog-toolbar">
+              <button type="button" autoFocus aria-label="Zamknij formularz" title="Zamknij (Esc)" onClick={onClose} className="defect-dialog-close">×</button>
+            </div>
+            {children}
+          </dialog>, document.body);
+      };
+
       const AddDefect = ({ units, setUnits, components, initialDefect = null, initialUnitNumber = '', onDone }) => {
         const [unitNumber, setUnitNumber] = useState(initialDefect?.unitNumber || initialUnitNumber);
         const [component, setComponent] = useState(initialDefect?.component || '');
         const [componentSearch, setComponentSearch] = useState('');
+        const [deliveryDate, setDeliveryDate] = useState(initialDefect?.deliveryDate || '');
         const [fields, setFields] = useState(initialDefect?.fields || {});
         const [saving, setSaving] = useState(false);
         const mobile = isMobile();
@@ -1849,6 +1902,7 @@ const LoginScreen = () => {
   unitNumber: normalizeUnitNumber(unitNumber),
   component,
   fields,
+  deliveryDate,
   comment: comment || '', // NOWE - dodaj komentarz
   completed: initialDefect?.completed || false,
   dateAdded: initialDefect?.dateAdded || new Date().toISOString(),
@@ -1866,6 +1920,7 @@ const LoginScreen = () => {
             setUnitNumber('');
             setComponent('');
             setComponentSearch('');
+            setDeliveryDate('');
             setFields({});
             setComment('');
 
@@ -1954,6 +2009,11 @@ const LoginScreen = () => {
                       />
                     </div>
                   ))}
+              <div className="space-y-2">
+                <label className="form-label" htmlFor="delivery-date">Przewidywany czas dostawy (opcjonalnie)</label>
+                <input id="delivery-date" type="date" className="form-input" value={deliveryDate} onChange={e => setDeliveryDate(e.target.value)} />
+                {deliveryDate && <button type="button" className="text-orange-700" onClick={() => setDeliveryDate('')}>Usuń termin</button>}
+              </div>
                                 {/* NOWE - Pole komentarza */}
               <div className="space-y-2 md:space-y-3 md:col-span-2">
                 <label className="form-label">KOMENTARZ (OPCJONALNIE)</label>
@@ -2102,12 +2162,16 @@ const DefectList = ({
     }
   };
 
-  const handleCheckboxChange = (defectId, checked) => {
-    setTempUnits(
-      tempUnits.map((unit) =>
-        unit.id === defectId ? { ...unit, completed: checked } : unit
-      )
-    );
+  const handleCheckboxChange = async (defectId, checked) => {
+    if (updating || deleteLock.current) return;
+    setUpdating(true);
+    try {
+      await window.dataManager.updateData('units', defectId, { completed: checked });
+      setUnits(prev => prev.map(item => item.id === defectId ? { ...item, completed: checked } : item));
+      setTempUnits(prev => prev.map(item => item.id === defectId ? { ...item, completed: checked } : item));
+    } catch (error) {
+      showToast('Nie udało się zapisać statusu. Spróbuj ponownie.', 'error');
+    } finally { setUpdating(false); }
   };
 
   const handleConfirm = async (unitNumber) => {
@@ -2177,10 +2241,9 @@ const DefectList = ({
         onClear={() => setSearchQuery('')}
       />
 
-      {defectEditor && <div className="my-4">
-        <button className="btn-secondary mb-2" onClick={() => setDefectEditor(null)}>Zamknij formularz</button>
+      {defectEditor && <DefectDialog onClose={() => setDefectEditor(null)}>
         <AddDefect key={defectEditor.id || defectEditor.unitNumber} units={units} setUnits={setUnits} components={components} initialDefect={defectEditor.id ? defectEditor : null} initialUnitNumber={defectEditor.unitNumber} onDone={() => setDefectEditor(null)} />
-      </div>}
+      </DefectDialog>}
       <div className="space-y-2 md:space-y-3">
         {sortedUnits.map((unitNumber) => {
           const unitDefects = tempUnits.filter((u) => u.unitNumber === unitNumber);
@@ -2219,6 +2282,7 @@ const DefectList = ({
                         <td className="px-2 py-1.5 font-medium">
                           <i className="fas fa-cog text-orange-400 text-xs mr-1"></i>
                           {defect.component}
+                          {defect.deliveryDate && <small className="block text-gray-600">Dostawa: {defect.deliveryDate.split('-').reverse().join('.')}</small>}
                         </td>
                         <td className="px-2 py-1.5 text-gray-600">
                           {Object.entries(defect.fields).map(([k, v]) => (
@@ -2596,6 +2660,7 @@ const DefectList = ({
                                   <i className="fas fa-cog mr-1 md:mr-2 text-orange-500"></i>
                                   <span className="text-xs md:text-sm">
                                     {defect.component}
+                          {defect.deliveryDate && <small className="block text-gray-600">Dostawa: {defect.deliveryDate.split('-').reverse().join('.')}</small>}
                                   </span>
                                 </td>
                                 <td className="text-xs md:text-sm text-gray-600">
